@@ -1,0 +1,9 @@
+首先创建ctx
+    amdgpu_cs_ctx_create(&amdgpu_context_handle)
+然后创建两个bo
+    amdgpu_bo_alloc_and_map: 4096, AMDGPU_GEM_DOMAIN_GTT
+然后, 将两个bo一起组建成bo_l
+    amdgpu_get_bo_list:ib_result_handle, ib_result_ce_handle, &bo_list
+最后，将所有bo通过bo list提交下去
+    ibs_request.resources = bo_list将bo_list传递给cs
+
