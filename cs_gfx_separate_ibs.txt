@@ -7,3 +7,37 @@
 最后，将所有bo通过bo list提交下去
     ibs_request.resources = bo_list将bo_list传递给cs
 
+1，单步跟踪GTT、VRAM(visable and invisible)的创建过程
+2, 在vmc 分配后，不进行map动作，就写来trigger vmc page fault，来看看报错的virtual mc address是否
+
+http://git.amd.com:8080/#/c/183013/1
+
+bo CPU map:
+	amdgpu_gem_mmap_ioctl
+		amdgpu_bo_mmap_offset
+			drm_vma_node_offset_addr
+				((__u64)node->vm_node.start) // 这个start，是在0-16g vram中的偏移. 这个和bo create时候，分配的vram node的起始地址一样
+				让我们对&args->out.addr_ptr进行跟踪一下
+	mmap, 对整个gpu file node进行mmap，offset是args->out.addr_ptr; 这里涉及到drm系统对整个gpu的映射 mmap
+bo GPU map:
+cs
+
+另外，可以关注下:amdgpu_find_bo_by_cpu_mapping --> amdgpu_gem_find_bo_by_cpu_mapping_ioctl
+		vma = find_vma(current->mm, args->addr);
+		tbo = vma->vm_private_data; // Key, 什么时候，tbo被赋值给了vm_private_data?, ttm_bo_mmap
+			amdgpu_driver_kms_fops中，就设置了.mmap = amdgpu_mmap，所以我怀疑对/dev/dri/card0的mmap，就会call到这里来
+		bo = container_of(tbo, struct amdgpu_bo, tbo);
+		gobj = &amdgpu_gobj->base;
+		handle = amdgpu_gem_get_handle_from_object(filp, gobj); // 除了可以通过handle定位到指针 gobj，也可以反过来.
+
+
+drm_driver:.open = amdgpu_driver_open_kms 和 amdgpu_driver_kms_fops中的.open = drm_open,，是什么关系？ 是绑在/dev/dri/card0上? 调用有先后顺序?
+这个可以在basic_test.c中断一下就知道了. Called whenever a process opens /dev/drm for drm_open.
+那么 /dev/drm 和/dev/dri/card0是神马关系?
+drm_open--> drm_open_helper --> driver->open:amdgpu_driver_open_kms
+那map也肯定是走amdgpu_mmap了,ok，他会call ttm_bo_mmap，做如下几件事情
+		(*重要)	通过传进来的 vm-offset和size，来找到physical的bo, 这也是为什么在mmap之前，我们需要调用一个gem_mmap来返回bo的offset
+			verify_access
+		(*重要) vma->vm_ops = &ttm_bo_vm_ops;// 挂载 vm page fault的处理函数, 也就是说，我们的GTT是在最后关头才会分配的
+		(*重要) vma->vm_private_data = bo;
+好，在mmap之后，接下来就可能需要填充ib了，那么我们就会有vm page fault产生，然后，就分配page，以及产生页表
